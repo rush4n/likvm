@@ -211,6 +211,56 @@ void
 vmxinit(void)
 {
   /* HW1 part 1: write this function; see HW1.md. */
+  /* STEP 1: From the Intel SDM, we know CPUID.01H:ECX.VMX[5] = 1
+   * CPUID takes EAX (leaf) and ECX (subleaf) as input and returns 
+   * information into the general purpose registers.
+   * CPUID1_ECX_VMX is defined in vmx.h as (1 << 5): shift 1 by 5 
+   * positions left.
+  */
+  uint a, b, c, d;
+  uint fc, cr0, cr4;
+  int id = cpuid();
+  char *region;
+
+  cpuid_insn(1, &a, &b, &c, &d);
+  if(!(c & CPUID1_ECX_VMX)) {
+    cprintf("cpu%d: no VMX support\n", id);
+    return;
+  }
+
+  fc = rdmsr(MSR_IA32_FEATURE_CONTROL);
+  if (!(fc & FEATURE_CONTROL_LOCKED)) {
+    fc |= FEATURE_CONTROL_LOCKED | FEATURE_CONTROL_VMXON_OUTSIDE_SMX;
+    wrmsr(MSR_IA32_FEATURE_CONTROL, fc);
+  }
+  if (!(fc & FEATURE_CONTROL_VMXON_OUTSIDE_SMX)) {
+    cprintf("cpu%d: VMX disabled by firware\n", id);
+    return;
+  }
+
+  cr0 = rcr0();
+  cr0 |= rdmsr(MSR_IA32_VMX_CR0_FIXED0);
+  cr0 &= rdmsr(MSR_IA32_VMX_CR0_FIXED1);
+  lcr0(cr0);
+  cr4 = rcr4();
+  cr4 |= rdmsr(MSR_IA32_VMX_CR4_FIXED0);
+  cr4 &= rdmsr(MSR_IA32_VMX_CR4_FIXED1);
+  lcr4(cr4);
+
+  vmcs_revision = rdmsr(MSR_IA32_VMX_BASIC) & 0x7FFFFFFF;
+  if ((region = kalloc()) == 0) {
+    cprintf("cpu%d: no memory for the VMXON region\n", id);
+    return;
+  }
+  memset(region, 0, PGSIZE);
+  *(uint*)region = vmcs_revision;
+
+  if (vmxon(V2P(region)) < 0) {
+    cprintf("cpu%d: vmxon failed\n", id);
+    return;
+  }
+  cpus[id].vmx_ok = 1;
+  cprintf("cpu%d: VMX enabled\n", id);
 }
 
 /*
