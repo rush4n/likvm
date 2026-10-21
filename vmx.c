@@ -354,7 +354,25 @@ static uint64*
 eptwalk(uint64 *pml4, uint64 gpa, int alloc)
 {
   /* HW1 part 2: write this function; see HW1.md. */
-  return 0;
+  uint64 *table = pml4, *e;
+  char *next;
+  int level;
+
+  for (level = 3; level > 0; level--) {
+    e = &table[(gpa >> (12 + 9 * level)) & 0x1FF];
+    if (*e & EPT_RWX) {
+      table = (uint64 *) P2V(EPT_ADDR(*e));
+    } else {
+      if (!alloc || (next = kalloc()) == 0)
+        return 0;
+      memset(next, 0, PGSIZE);
+
+      *e = V2P(next) | EPT_RWX;
+      table = (uint64 *) next;
+    }
+  }
+
+  return &table[(gpa >> 12) & 0x1FF];
 }
 
 /*
@@ -432,7 +450,85 @@ vmcreate(char *image, int len, int memsz)
   int id, n, off, r;
 
   /* HW1 part 2: write this function; see HW1.md. */
-  return -1;
+  if (memsz <= 0 || memsz > VM_MAXMEM || len < 0 || VM_LOAD_ADDR + len > memsz) 
+    return -1;
+
+  pushcli();
+  r = mycpu()->vmx_ok;
+  popcli();
+  if (!r)
+    return -1;
+  
+  need = EPT_CAP_WALK_4 | EPT_CAP_MEMTYPE_WB | EPT_CAP_INVEPT | EPT_CAP_INVEPT_SINGLE;
+  if ((rdmsr(MSR_IA32_VMX_EPT_VPID_CAP) & need) != need) {
+    cprintf("vmx: CPU lacks required EPT features\n");
+    return -1;
+  }
+
+  acquire(&vms.lock);
+  for (id = 0; id < NVM; id++) 
+    if (!vms.vm[id].used)
+      break;
+  
+  if (id == NVM) {
+    release(&vms.lock);
+    return -1;
+  }
+  vm = &vms.vm[id];
+
+  memset(vm, 0, sizeof(*vm));
+  vm->used = 1;
+  vm->owner = myproc();
+  release(&vms.lock);
+
+  vm->memsz = PGROUNDUP(memsz);
+  vm->rflags = 0x2;
+
+  if ((vm->vmcs = kalloc()) == 0)
+    goto bad;
+  memset(vm->vmcs, 0, PGSIZE);
+
+  if((vm->ept = (uint64*)kalloc()) == 0)
+    goto bad;
+  memset(vm->ept, 0, PGSIZE);
+  
+  vm->eptp = V2P(vm->ept) | EPTP_WALK_4 | EPTP_MEMTYPE_WB;
+
+  for (gpa = 0; gpa < vm->memsz; gpa += PGSIZE) {
+    if ((pte = eptwalk(vm->ept, gpa, 1)) == 0 || (mem = kalloc()) == 0)
+      goto bad;
+    memset(mem, 0, PGSIZE);
+    *pte = V2P(mem) | EPT_RWX | EPT_MEMTYPE_WB;
+  }
+
+  for (off = 0; off < len; off += n) {
+    gpa = VM_LOAD_ADDR + off;
+    n = PGSIZE - gpa % PGSIZE;
+    if (n > len - off)
+      n = len - off;
+    pte = eptwalk(vm->ept, gpa, 0);
+    memmove((char*)P2V(EPT_ADDR(*pte)) + gpa % PGSIZE, image + off, n);
+  }
+
+  cprintf("vmcreate: vm %d, memsz %x, eptp %x\n", id, vm->memsz, vm->eptp);
+
+  *(uint*)vm->vmcs = vmcs_revision;
+  pushcli();
+  if (!mycpu()->vmx_ok || vmclear(V2P(vm->vmcs)) < 0 || vmptrld(V2P(vm->vmcs)) < 0) {
+    popcli();
+    goto bad;
+  }
+  r = vmcsinit(vm);
+
+  vmclear(V2P(vm->vmcs));
+  popcli();
+  if (r < 0)
+    goto bad;
+  return id;
+
+  bad:
+    vmfree(vm);
+    return -1;
 }
 
 /*

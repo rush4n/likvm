@@ -4,9 +4,9 @@ Fill in this file and hand it in with your code. Replace each
 `(your answer)` with two or three sentences. Keep the question numbers
 (part.question), and do not delete the questions.
 
-- **Name:**
-- **Machine and environment you tested on** (CADE lab machine with QEMU, or Bochs):
-- **How far did you get?** (for example "all six parts work", or "stuck in part 4, block B"):
+- **Name:** Rushan Shaikh
+- **Machine and environment you tested on** (CADE lab machine with QEMU, or Bochs): local linux machine with QEMU 10.0.13
+- **How far did you get?** (for example "all six parts work", or "stuck in part 4, block B"): 
 
 
 ## Part 1: Entering VMX operation
