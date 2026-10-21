@@ -284,7 +284,17 @@ static int
 adjustctl(uint msr, uint want, uint *ctl)
 {
   /* HW1 part 3: write this function; see HW1.md. */
-  return -1;
+  /* Step 2 */
+  uint64 cap = rdmsr(msr);
+  uint v = (want | (uint) cap) & (uint) (cap >> 32);
+
+  if ((v & want) != want) {
+    cprintf("vmx: controls 0x%x unsupported (MSR 0x%x)\n",
+            (uint64)(want & ~v), (uint64) msr);
+    return -1;
+  }
+  *ctl = v;
+  return 0;
 }
 
 /*
@@ -319,6 +329,104 @@ static int
 vmcsinit(struct vm *vm)
 {
   /* HW1 part 3: write this function; see HW1.md. */
+  /* Step 1 */
+  uint pin, cpu, cpu2, exitctl, entryctl;
+
+  int t = (rdmsr(MSR_IA32_VMX_BASIC) & VMX_BASIC_TRUE_CTLS) != 0;
+  uint64 cr0, cr4;
+  int seg;
+
+  /* Step 3 */
+  if (adjustctl(t ? MSR_IA32_VMX_TRUE_PINBASED_CTLS : MSR_IA32_VMX_PINBASED_CTLS,
+                PIN_EXTINT_EXITING | PIN_NMI_EXITING, &pin) < 0 ||
+      adjustctl(t ? MSR_IA32_VMX_TRUE_PROCBASED_CTLS : MSR_IA32_VMX_PROCBASED_CTLS,
+                CPU_HLT_EXITING | CPU_UNCOND_IO_EXITING | CPU_ACTIVATE_SECONDARY, 
+                &cpu) < 0 ||
+      adjustctl(MSR_IA32_VMX_PROCBASED_CTLS2,
+                CPU2_ENABLE_EPT | CPU2_UNRESTRICTED_GUEST, &cpu2) < 0 ||
+      adjustctl(t ? MSR_IA32_VMX_TRUE_EXIT_CTLS : MSR_IA32_VMX_EXIT_CTLS,
+                EXIT_HOST_ADDR_SPACE_SIZE | EXIT_SAVE_IA32_EFER | 
+                EXIT_LOAD_IA32_EFER, &exitctl) < 0 ||
+      adjustctl(t ? MSR_IA32_VMX_TRUE_ENTRY_CTLS : MSR_IA32_VMX_ENTRY_CTLS,
+                ENTRY_LOAD_IA32_EFER, &entryctl) < 0)
+    return -1;
+  
+  /* Step 4 */
+  if (cpu & (CPU_CR3_LOAD_EXITING | CPU_CR3_STORE_EXITING |
+      CPU_USE_IO_BITMAPS | CPU_USE_MSR_BITMAPS)) {
+        cprintf("vmx: CPU forces unwanted exiting controls 0x%x\n", (uint64)cpu);
+        return -1;
+      }
+
+  /* Step 5 */
+  vmwrite(PIN_BASED_VM_EXEC_CONTROL, pin);
+  vmwrite(CPU_BASED_VM_EXEC_CONTROL, cpu);
+  vmwrite(SECONDARY_VM_EXEC_CONTROL, cpu2);
+  vmwrite(VM_EXIT_CONTROLS, exitctl);
+  vmwrite(VM_ENTRY_CONTROLS, entryctl);
+  
+  /* Step 6*/
+  vmwrite(EXCEPTION_BITMAP, 0xFFFFFFFF);
+  vmwrite(PAGE_FAULT_ERROR_CODE_MASK, 0);
+  vmwrite(PAGE_FAULT_ERROR_CODE_MATCH, 0);
+
+  /* Step 7*/
+  vmwrite(CR3_TARGET_COUNT, 0);
+  vmwrite(VM_EXIT_MSR_STORE_COUNT, 0);
+  vmwrite(VM_EXIT_MSR_LOAD_COUNT, 0);
+  vmwrite(VM_ENTRY_MSR_LOAD_COUNT, 0);
+  vmwrite(VM_ENTRY_INTR_INFO_FIELD, 0);
+  vmwrite(EPT_POINTER, vm->eptp);
+
+  /* Step 8 */
+  vmwrite(CR0_GUEST_HOST_MASK, 0);
+  vmwrite(CR0_READ_SHADOW, 0);
+  vmwrite(CR4_GUEST_HOST_MASK, 0);
+  vmwrite(CR4_READ_SHADOW, 0);
+  vmwrite(HOST_RIP, (uint64)vmx_exit);
+
+  /* Step 9 */
+  cr0 = CR0_PE | CR0_ET | CR0_NE;
+  cr0 |= rdmsr(MSR_IA32_VMX_CR0_FIXED0) & ~(uint64)(CR0_PE | CR0_PG);
+  cr0 &= rdmsr(MSR_IA32_VMX_CR0_FIXED1);
+
+  cr4 = CR4_VMXE | rdmsr(MSR_IA32_VMX_CR4_FIXED0);
+  cr4 &= rdmsr(MSR_IA32_VMX_CR4_FIXED1);
+  
+  vmwrite(GUEST_CR0, cr0);
+  vmwrite(GUEST_CR3, 0);
+  vmwrite(GUEST_CR4, cr4);
+  vmwrite(GUEST_DR7, 0x400);
+
+  /* Step 10 */
+  guestseg(SEG_CS, 0x08, 0, 0xFFFFFFFF, AR_CODE32);
+  for (seg = SEG_ES; seg <= SEG_GS; seg++)
+    if (seg != SEG_CS)
+      guestseg(seg, 0x10, 0, 0xFFFFFFFF, AR_DATA32);
+  
+  guestseg(SEG_LDTR, 0, 0, 0, AR_UNUSABLE);
+  guestseg(SEG_TR, 0, 0, 0, AR_TSS32_BUSY);
+
+  /* Step 11 */
+  vmwrite(GUEST_GDTR_BASE, 0);
+  vmwrite(GUEST_GDTR_LIMIT, 0);
+  vmwrite(GUEST_IDTR_BASE, 0);
+  vmwrite(GUEST_IDTR_LIMIT, 0);
+
+  /* Step 12 */
+  vmwrite(GUEST_INTERRUPTIBILITY_INFO, 0);
+  vmwrite(GUEST_ACTIVITY_STATE, 0);
+  vmwrite(GUEST_PENDING_DBG_EXCEPTIONS, 0);
+  vmwrite(VMCS_LINK_POINTER, ~0ULL);
+  vmwrite(GUEST_IA32_DEBUGCTL, 0);
+  vmwrite(GUEST_SYSENTER_CS, 0);
+  vmwrite(GUEST_SYSENTER_ESP, 0);
+  vmwrite(GUEST_SYSENTER_EIP, 0);
+
+  cprintf("vmcs: cpu2=0x%x cr0=0x%x cr4=0x%x link=0x%x\n",
+          vmread(SECONDARY_VM_EXEC_CONTROL), vmread(GUEST_CR0),
+          vmread(GUEST_CR4), vmread(VMCS_LINK_POINTER));
+
   return 0;
 }
 
