@@ -491,7 +491,7 @@ vmcreate(char *image, int len, int memsz)
   if((vm->ept = (uint64*)kalloc()) == 0)
     goto bad;
   memset(vm->ept, 0, PGSIZE);
-  
+
   vm->eptp = V2P(vm->ept) | EPTP_WALK_4 | EPTP_MEMTYPE_WB;
 
   for (gpa = 0; gpa < vm->memsz; gpa += PGSIZE) {
@@ -510,8 +510,13 @@ vmcreate(char *image, int len, int memsz)
     memmove((char*)P2V(EPT_ADDR(*pte)) + gpa % PGSIZE, image + off, n);
   }
 
+  /*
   cprintf("vmcreate: vm %d, memsz %x, eptp %x\n", id, vm->memsz, vm->eptp);
-
+  pte = eptwalk(vm->ept, VM_LOAD_ADDR, 0);
+  cprintf("image word %x, guest word %x\n", *(uint*)image,
+          *(uint*)P2V(EPT_ADDR(*pte)));
+  */
+  
   *(uint*)vm->vmcs = vmcs_revision;
   pushcli();
   if (!mycpu()->vmx_ok || vmclear(V2P(vm->vmcs)) < 0 || vmptrld(V2P(vm->vmcs)) < 0) {
