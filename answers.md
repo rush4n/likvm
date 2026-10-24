@@ -16,7 +16,7 @@ Fill in this file and hand it in with your code. Replace each
 > In Step 1, why does the function `return` when VMX is missing instead
 > of calling `panic()`?
 
-**Answer:** (your answer)
+**Answer:** If VMX is missing then the function print's the message and returns because VM creation failed and this failure does not cause xv6 to panic, i.e. xv6 can still run normally.
 
 ### Question 1.2
 
@@ -24,21 +24,21 @@ Fill in this file and hand it in with your code. Replace each
 > locked VMX. Why does the code still handle the unlocked case instead
 > of just failing?
 
-**Answer:** (your answer)
+**Answer:** The reason why code handles the unlocked case is because VMX might not be disabled and not configured and failing would reject a machine where VMX can still be safely enabled.
 
 ### Question 1.3
 
 > In Step 3, what would happen if we skipped `lcr4(cr4)` and went
 > straight to `VMXON`?
 
-**Answer:** (your answer)
+**Answer:** xv6 will panic because virtial cr4 will not be set and VMXON happens in the kernel. 
 
 ### Question 1.4
 
 > In Step 4, why does each CPU need its own VMXON region? What could go
 > wrong if all CPUs shared one?
 
-**Answer:** (your answer)
+**Answer:** CPU needs its own VMXON region for internal bookkeeping. If all CPUs shared a VMXON region then they might interfere with each other's state, which will cause a failure.
 
 ## Part 2: Creating a VM, its memory, and the EPT
 
@@ -49,7 +49,7 @@ Fill in this file and hand it in with your code. Replace each
 > would go wrong if the hypervisor gave the guest direct access to the
 > host's physical memory instead?
 
-**Answer:** (your answer)
+**Answer:** EPT translates the guest physical address to host physical address. The hypervisor controls the EPT.
 
 ### Question 2.2
 
@@ -57,7 +57,7 @@ Fill in this file and hand it in with your code. Replace each
 > zero every new table. These are two different reasons to zero. State
 > each, and say what the guest or the CPU would see if we skipped it.
 
-**Answer:** (your answer)
+**Answer:** kalloc() does not clear memory, and kfree() fills pages with junk. If we do not zero every page then the guest might read previous information stored in the page.
 
 ### Question 2.3
 
@@ -65,7 +65,7 @@ Fill in this file and hand it in with your code. Replace each
 > `eptwalk()`, instead of one `memmove` of `len` bytes to the guest's
 > first page?
 
-**Answer:** (your answer)
+**Answer:** The guest physical address is contiguous but the host pages are not contiguous because they came from kalloc(). This is why we cannot memove it directly to some kernel address.
 
 ### Question 2.4
 
@@ -75,7 +75,7 @@ Fill in this file and hand it in with your code. Replace each
 > treats as valid (hint: see Appendix A.10 for execute-only support), and
 > say why our code never creates such an entry.
 
-**Answer:** (your answer)
+**Answer:** Execute-only translations by EPT is the example where X is set to 1 then it is valid entry even if R is clear.
 
 ## Part 3: The VMCS, describing the guest and the host
 
@@ -86,7 +86,7 @@ Fill in this file and hand it in with your code. Replace each
 > `want` has a bit that `high` has cleared, and why is returning an error
 > better than silently dropping the bit?
 
-**Answer:** (your answer)
+**Answer:** if masking with high half cleared one of them then the CPU does not support what we asked for, and we cannot make the VM work. Returning an error is better than creating a VM with incorrect behaviour.
 
 ### Question 3.2
 
@@ -95,7 +95,7 @@ Fill in this file and hand it in with your code. Replace each
 > is 0? Why is the all-ones setting more useful to someone debugging a
 > guest?
 
-**Answer:** (your answer)
+**Answer:** A guest bug would turn into a double fault and then into a triple fault, and the guest would simply die with no information about what happened. All-ones is useful because any exception becomes a VM-exit.
 
 ### Question 3.3
 
@@ -103,7 +103,7 @@ Fill in this file and hand it in with your code. Replace each
 > about what the CPU does with a guest linear address when `CR0.PG = 0`
 > (SDM 28.6).
 
-**Answer:** (your answer)
+**Answer:** unrestricted guest allows the guest to run with paging disabled, so guest-linear address is passed straight to the EPT. Thus, EPT must be enabled to translate this address to host physical address.
 
 ### Question 3.4
 
@@ -111,7 +111,7 @@ Fill in this file and hand it in with your code. Replace each
 > Which two VMCS fields make that work? What happens if the guest tries to
 > set `CR4.VMXE` to 1, and why do we not let it?
 
-**Answer:** (your answer)
+**Answer:** CR4_GUEST_HOST_MASK and CR4_READ_SHADOW makes it possible. If the guest tries to set CR4.VMXE to 1, a VM exit occurs. We do not let it because the real bit must remain set while CPU is in VMX operation.
 
 ## Part 4: Entering and leaving the guest
 
