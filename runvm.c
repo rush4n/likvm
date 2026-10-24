@@ -56,6 +56,16 @@ static char image[MAXIMAGE];
 static void
 completein(int vm, int size, uint val)
 {
+  uint64 rax, bits;
+  
+  if (size == 4) {
+    vmsetreg(vm, VMREG_RAX, (uint64)val);
+    return;
+  }
+  vmgetreg(vm, VMREG_RAX, &rax);
+  bits = size == 1 ? 0xFF : 0xFFFF;
+  rax = (rax & ~bits) | ((uint64)val & bits);
+  vmsetreg(vm, VMREG_RAX, rax);
 }
 
 /*

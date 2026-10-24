@@ -6,7 +6,7 @@ Fill in this file and hand it in with your code. Replace each
 
 - **Name:** Rushan Shaikh
 - **Machine and environment you tested on** (CADE lab machine with QEMU, or Bochs): local linux machine with QEMU 10.0.13
-- **How far did you get?** (for example "all six parts work", or "stuck in part 4, block B"): 
+- **How far did you get?** (for example "all six parts work", or "stuck in part 4, block B"): all six parts work
 
 
 ## Part 1: Entering VMX operation
@@ -122,7 +122,7 @@ Fill in this file and hand it in with your code. Replace each
 > CPU keep it instead, and what would go wrong if `vmx_exit` tried to
 > store `%rsp` into `*regs` like the others?
 
-**Answer:** (your answer)
+**Answer:** The guest's rsp is stored in the VMCS guest area. It is handled differently because the CPU loads and saves for every VM entry and exit.
 
 ### Question 4.2
 
@@ -131,7 +131,7 @@ Fill in this file and hand it in with your code. Replace each
 > not? Describe a concrete situation in which the `HOST_RSP` written by
 > a previous entry would be wrong.
 
-**Answer:** (your answer)
+**Answer:** HOST_RSP changes because it points to the host stack frame, while HOST_RIP always points to vm_exit label. A situation where the runvm() is called by another process.
 
 ### Question 4.3
 
@@ -140,7 +140,7 @@ Fill in this file and hand it in with your code. Replace each
 > `vmrun()` execute it? What would the VM-instruction error be if the
 > code passed `launched = 1` on the first entry?
 
-**Answer:** (your answer)
+**Answer:** VMCLEAR clears the launch state. The VM-instruction error is VMLAUNCH with non-clear VMCS (Error Number 5 in the Intel SDE Manual).
 
 ### Question 4.4
 
@@ -149,7 +149,7 @@ Fill in this file and hand it in with your code. Replace each
 > say what is different (CPU, process, or both) for each. What would
 > happen at the next VM exit if the field kept the old value?
 
-**Answer:** (your answer)
+**Answer:** The two fields are HOST_CR3 and HOST_TR_BASE. HOST_CR3 changes between processes and HOST_TR_BASE changes between CPUs. An old value may incorrectly map the kernel stack for HOST_CR3 and incorrectly load TSS for HOST_TR_BASE.
 
 ## Part 5: Running the guest, the vmrun loop and exit handling
 
@@ -159,7 +159,7 @@ Fill in this file and hand it in with your code. Replace each
 > concrete sequence of events, with two CPUs, in which the opposite
 > order corrupts the VMCS. Which sentence of SDM 27.11.1 do you rely on?
 
-**Answer:** (your answer)
+**Answer:** CPU0 does a VM exit and popcli() enables interrupts before vmclear(), if this process then moves to CPU1 then it corrupts the VMCS. I used 'A VMCS that is made active on more than one logical processor may become corrupted' from the Intel SDE Manual.
 
 ### Question 5.2
 
@@ -168,7 +168,7 @@ Fill in this file and hand it in with your code. Replace each
 > the VMCS loaded between exits and used `VMRESUME` instead? What would
 > we give up?
 
-**Answer:** (your answer)
+**Answer:** The program must not clear the VMCS region to use VMRESUME after a VM exit. We would not be able the run that guest again on a different CPU.
 
 ### Question 5.3
 
@@ -177,7 +177,7 @@ Fill in this file and hand it in with your code. Replace each
 > Where and when exactly does the host handle it? What would change if
 > the exit control "acknowledge interrupt on exit" were set?
 
-**Answer:** (your answer)
+**Answer:** The interrupt is handled by the normal interrupt handler after popcli(). if acknowledge interrupt on exit were set, the CPU would handle it during the VM exit.
 
 ### Question 5.4
 
@@ -186,8 +186,8 @@ Fill in this file and hand it in with your code. Replace each
 > length (for instance 2) instead? Name one instruction in `helloguestasm.S`
 > or `helloguest.c` that shows the problem.
 
-**Answer:** (your answer)
-
+**Answer:** Using a fixed length would be wrong because the guest could resume at the wrong place. If we use a constant 2 then line 44: [out %al,(%dx)] may cause a problem for instruction with length < 2. 
+ 
 ## Part 6: The other half: the monitor (runvm) and the guest
 
 ### Question 6.1
@@ -197,7 +197,7 @@ Fill in this file and hand it in with your code. Replace each
 > And why does `completein()` read RAX with `vmgetreg()` for a 1-byte
 > `IN` but not for a 4-byte one?
 
-**Answer:** (your answer)
+**Answer:** IN need the montior to write guest's RAX with vmsetreg() because completein() later uses vmsetreg() to update it. It is because a 4-byte write clears the high 32-bits, while for a 1-byte write we preserve the other bytes.
 
 ### Question 6.2
 
@@ -206,7 +206,7 @@ Fill in this file and hand it in with your code. Replace each
 > guest that will go wrong and say why. (Look at the page tables, the
 > `gdtdesc`, and where the first instruction is.)
 
-**Answer:** (your answer)
+**Answer:** The kernel copies the guest image at 0x100000, and the page tables and GDT contain addresses computed at link time. So, page table would point to wrong addresses and gdtdesc would also be wrong, causing a guest crash at first ljmp or first access through gdtdesc.
 
 ### Question 6.3
 
@@ -215,7 +215,7 @@ Fill in this file and hand it in with your code. Replace each
 > `runvm helloguest 1` experiment: which message do you get, and which
 > check in the kernel produces it?
 
-**Answer:** (your answer)
+**Answer:** This is the message I got runvm: vmcreate failed, this is because "VM_LOAD_ADDR + len > memsz" check fails trying to load helloguest at 1 MB. (DOUBT: I still get the same output message without swapping the order so I don't know if I did this correctly.)
 
 ### Question 6.4
 
@@ -224,4 +224,4 @@ Fill in this file and hand it in with your code. Replace each
 > put the serial port in `runvm` and not in the kernel? What would you
 > gain, and what would you lose, by emulating it inside the kernel?
 
-**Answer:** (your answer)
+**Answer:** It is efficient to emulate it in the kernel, but I believe it would make it more complicated.
