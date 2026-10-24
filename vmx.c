@@ -422,10 +422,12 @@ vmcsinit(struct vm *vm)
   vmwrite(GUEST_SYSENTER_CS, 0);
   vmwrite(GUEST_SYSENTER_ESP, 0);
   vmwrite(GUEST_SYSENTER_EIP, 0);
-
+  
+  /*
   cprintf("vmcs: cpu2=0x%x cr0=0x%x cr4=0x%x link=0x%x\n",
           vmread(SECONDARY_VM_EXEC_CONTROL), vmread(GUEST_CR0),
           vmread(GUEST_CR4), vmread(VMCS_LINK_POINTER));
+  */
 
   return 0;
 }
@@ -684,7 +686,23 @@ vmsetreg(int id, int reg, uint64 val)
   struct vm *vm;
 
   /* HW1 part 5: write this function; see HW1.md. */
-  return -1;
+  if ((vm = getvm(id)) == 0 || reg < 0 || reg >= VMREG_NREGS)
+    return -1;
+  
+  switch (reg) {
+    case VMREG_RSP:
+      vm->rsp = val;
+      break;
+    case VMREG_RIP:
+      vm->rip = val;
+      break;
+    case VMREG_RFLAGS:
+      vm->rflags = val | 0x2;
+      break;
+    default:
+      ((uint64*)&vm->regs)[reg] = val;
+  }
+  return 0;
 }
 
 /*
@@ -701,7 +719,23 @@ vmgetreg(int id, int reg, uint64 *val)
   struct vm *vm;
 
   /* HW1 part 5: write this function; see HW1.md. */
-  return -1;
+  if ((vm = getvm(id)) == 0 || reg < 0 || reg >= VMREG_NREGS)
+    return -1;
+
+  switch (reg) {
+    case VMREG_RSP:
+      *val = vm->rsp;
+      break;
+    case VMREG_RIP:
+      *val = vm->rip;
+      break;
+    case VMREG_RFLAGS:
+      *val = vm->rflags;
+      break;
+    default:
+      *val = ((uint64*)&vm->regs)[reg];
+  }
+  return 0;
 }
 
 /* Mask for the low `size` bytes (1, 2 or 4) of an I/O access. */
@@ -722,7 +756,19 @@ static int
 vmxmsr(struct vm *vm, int write)
 {
   /* HW1 part 5: write this function; see HW1.md. */
-  return -1;
+  uint64 val;
+
+  if ((uint)vm->regs.rcx != EFER_MSR)
+    return -1;
+  
+  if (write) {
+    val = (vm->regs.rdx << 32) | (uint)vm->regs.rax;
+    vm->efer = (val & ~(uint64)EFER_LMA) | (vm->efer & EFER_LMA);
+  } else {
+    vm->regs.rax = (uint)vm->efer;
+    vm->regs.rdx = vm->efer >> 32;
+  }
+  return 0;
 }
 
 /*
@@ -737,6 +783,34 @@ static int
 vmxhandle(struct vm *vm, struct vmexit *e, uint inslen)
 {
   /* HW1 part 5: write this function; see HW1.md. */
+  // cprintf("exit %d rip %x\n", (uint64)e->reason, e->rip);
+  switch (e->reason){
+    case EXIT_EXTERNAL_INTR:
+      return 1;
+    case EXIT_EXCEPTION_NMI:
+      if (INTR_INFO_TYPE(e->intrinfo) == INTR_TYPE_NMI)
+        return 1;
+      return 0;
+    case EXIT_RDMSR:
+    case EXIT_WRMSR:
+      if (vmxmsr(vm, e->reason == EXIT_WRMSR) < 0)
+        return 0;
+      vm->rip += inslen;
+      return 1;
+    case EXIT_HLT:
+      vm->rip += inslen;
+      return 0;
+    case EXIT_IO:
+      if(e->qual & (1 << 4))
+        return 0;
+      e->io.port = e->qual >> 16;
+      e->io.size = (e->qual & 7) + 1;
+      e->io.in = (e->qual >> 3) & 1;
+      vm->rip += inslen;
+      if(!e->io.in)
+        e->io.data = vm->regs.rax & iomask(e->io.size);
+      return 0;
+  }
   return 0;
 }
 
@@ -852,8 +926,8 @@ vmrun(int id, struct vmexit *ue)
       e.rip = vm->rip;
     }
     /* Release the VMCS and turn interrupts back on (HW1 part 5, Step 8). */
-    popcli();  /* a pending host interrupt is delivered here */
     vmclear(V2P(vm->vmcs));
+    popcli();  /* a pending host interrupt is delivered here */
 
     /*
      * Failed entries and VMLAUNCH failures always go to user space.
