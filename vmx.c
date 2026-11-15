@@ -426,12 +426,13 @@ vmcsinit(struct vm *vm)
   /* Step 5 */
   vmwrite(PIN_BASED_VM_EXEC_CONTROL, pin);
   vmwrite(CPU_BASED_VM_EXEC_CONTROL, cpu);
+  vm->cpuctl = cpu;
   vmwrite(SECONDARY_VM_EXEC_CONTROL, cpu2);
   vmwrite(VM_EXIT_CONTROLS, exitctl);
   vmwrite(VM_ENTRY_CONTROLS, entryctl);
   
   /* Step 6*/
-  vmwrite(EXCEPTION_BITMAP, 0xFFFFFFFF);
+  vmwrite(EXCEPTION_BITMAP, 0);
   vmwrite(PAGE_FAULT_ERROR_CODE_MASK, 0);
   vmwrite(PAGE_FAULT_ERROR_CODE_MATCH, 0);
 
@@ -649,7 +650,7 @@ vmcreate(char *image, int len, int memsz)
   struct vm *vm;
   uint64 gpa, *pte, need;
   char *mem;
-  int id, n, off, r;
+  int id, n, off, r, i;
 
   /* HW1 part 2: write this function; see HW1.md. */
   if (memsz <= 0 || memsz > VM_MAXMEM || len < 0 || VM_LOAD_ADDR + len > memsz) 
@@ -698,6 +699,14 @@ vmcreate(char *image, int len, int memsz)
 
   for (gpa = 0; gpa < vm->memsz; gpa += PGSIZE) {
     if ((pte = eptwalk(vm->ept, gpa, 1)) == 0 || (mem = kalloc()) == 0)
+      goto bad;
+    memset(mem, 0, PGSIZE);
+    *pte = V2P(mem) | EPT_RWX | EPT_MEMTYPE_WB;
+  }
+
+  for(i = 0; i < 2; i++){
+    gpa = i == 0 ? VM_LAPIC_ADDR : VM_IOAPIC_ADDR;
+    if((pte = eptwalk(vm->ept, gpa, 1)) == 0 || (mem = kalloc()) == 0)
       goto bad;
     memset(mem, 0, PGSIZE);
     *pte = V2P(mem) | EPT_RWX | EPT_MEMTYPE_WB;
@@ -865,6 +874,10 @@ vmxhandle(struct vm *vm, struct vmexit *e, uint inslen)
     case EXIT_HLT:
       vm->rip += inslen;
       return 0;
+    case EXIT_CPUID:
+      vmxcpuid(vm);
+      vm->rip += inslen;
+      return 1;
     case EXIT_IO:
       if(e->qual & (1 << 4))
         return 0;
@@ -1191,7 +1204,18 @@ nextpending(struct vm *vm)
 static void
 vmxcpuid(struct vm *vm)
 {
-  /* HW2 Part 3: write this function; see HW2.md. */
+  uint leaf, subleaf, eax, ebx, ecx, edx;
+
+  leaf = vm->regs.rax;
+  subleaf = vm->regs.rcx;
+  asm volatile("cpuid" : "=a" (eax), "=b" (ebx), "=c" (ecx), "=d" (edx)
+               : "0" (leaf), "2" (subleaf));
+  if(leaf == 1)
+    ecx &= ~CPUID1_ECX_VMX;
+  vm->regs.rax = eax;
+  vm->regs.rbx = ebx;
+  vm->regs.rcx = ecx;
+  vm->regs.rdx = edx;
 }
 
 /*
