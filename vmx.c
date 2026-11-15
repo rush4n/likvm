@@ -989,6 +989,9 @@ vmrun(int id, struct vmexit *ue)
       /* Saved because of EXIT_SAVE_IA32_EFER; picks up a new LMA. */
       vm->efer = vmread(GUEST_IA32_EFER);
       e.rip = vm->rip;
+      vm->cr0 = vmread(GUEST_CR0);
+      vm->cr3 = vmread(GUEST_CR3);
+      vm->cr4 = vmread(GUEST_CR4);
     }
     /* Release the VMCS and turn interrupts back on (HW1 part 5, Step 8). */
     vmclear(V2P(vm->vmcs));
@@ -1033,8 +1036,11 @@ vmxfreeproc(struct proc *p)
 static char*
 gpa2kva(struct vm *vm, uint64 gpa)
 {
-  /* HW2 Part 2: paste Step 2 of HW2.md. */
-  return 0;
+  uint64 *pte;
+
+  if((pte = eptwalk(vm->ept, gpa, 0)) == 0 || !(*pte & EPT_RWX))
+    return 0;
+  return (char*)P2V(EPT_ADDR(*pte)) + gpa % PGSIZE;
 }
 
 /*
@@ -1052,8 +1058,31 @@ gva2gpa(struct vm *vm, uint64 gva, uint64 *gpa)
   uint64 *p;
   int level;
 
-  /* HW2 Part 2: write this function; see HW2.md. */
-  return -1;
+  if(!(vm->cr0 & CR0_PG)){
+    *gpa = gva;
+    return 0;
+  }
+  if(!(vm->efer & EFER_LMA))
+    return -1;
+
+  table = vm->cr3 & 0x000FFFFFFFFFF000ULL;
+  for(level = 3; level >= 0; level--){
+    p = (uint64*)gpa2kva(vm, table +
+                         (((gva >> (12 + 9 * level)) & 0x1FF) * sizeof(uint64)));
+    if(p == 0)
+      return -1;
+    e = *p;
+    if(!(e & PTE_P))
+      return -1;
+    if((level == 2 || level == 1) && (e & PTE_PS)){
+      size = 1ULL << (12 + 9 * level);
+      *gpa = (e & ~(size - 1)) | (gva & (size - 1));
+      return 0;
+    }
+    table = e & 0x000FFFFFFFFFF000ULL;
+  }
+  *gpa = table | (gva & (PGSIZE - 1));
+  return 0;
 }
 
 /*
@@ -1073,8 +1102,27 @@ vmmem(int id, uint64 addr, char *buf, int len, int flags)
   char *k;
   int n, off;
 
-  /* HW2 Part 2: paste Steps 4 and 5 of HW2.md. */
-  return -1;
+  if((vm = getvm(id)) == 0 || len < 0)
+    return -1;
+
+  for(off = 0; off < len; off += n){
+    if(flags & VMMEM_VIRT){
+      if(gva2gpa(vm, addr + off, &gpa) < 0)
+        return -1;
+    } else {
+      gpa = addr + off;
+    }
+    if((k = gpa2kva(vm, gpa)) == 0)
+      return -1;
+    n = PGSIZE - (addr + off) % PGSIZE;
+    if(n > len - off)
+      n = len - off;
+    if(flags & VMMEM_WRITE)
+      memmove(k, buf + off, n);
+    else
+      memmove(buf + off, k, n);
+  }
+  return len;
 }
 
 /*
