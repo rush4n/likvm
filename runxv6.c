@@ -287,7 +287,43 @@ checksum(uchar *p, int len)
 static void
 mptables(void)
 {
-  /* HW2 Part 3: write this function; see HW2.md. */
+  ushort mem;
+  struct mp mp;
+  struct {
+    struct mpconf conf;
+    struct mpproc proc;
+    struct mpioapic ioapic;
+  } conf;
+
+  mem = 640;
+  if(vmmem(vm, 0x413, (char*)&mem, sizeof(mem), VMMEM_WRITE) < 0)
+    die("cannot write BIOS data area");
+
+  memset(&mp, 0, sizeof(mp));
+  memmove(mp.signature, "_MP_", 4);
+  mp.physaddr = 0xF0010;
+  mp.length = 1;
+  mp.specrev = 4;
+  mp.checksum = checksum((uchar*)&mp, sizeof(mp));
+  if(vmmem(vm, 0xF0000, (char*)&mp, sizeof(mp), VMMEM_WRITE) < 0)
+    die("cannot write MP floating pointer");
+
+  memset(&conf, 0, sizeof(conf));
+  memmove(conf.conf.signature, "PCMP", 4);
+  conf.conf.length = sizeof(conf);
+  conf.conf.version = 4;
+  conf.conf.entry = 2;
+  conf.conf.lapicaddr = VM_LAPIC_ADDR;
+  conf.proc.type = MPPROC;
+  conf.proc.version = 0x14;
+  conf.proc.flags = MPBOOT | 1;
+  conf.ioapic.type = MPIOAPIC;
+  conf.ioapic.version = 0x11;
+  conf.ioapic.flags = 1;
+  conf.ioapic.addr = VM_IOAPIC_ADDR;
+  conf.conf.checksum = checksum((uchar*)&conf, sizeof(conf));
+  if(vmmem(vm, 0xF0010, (char*)&conf, sizeof(conf), VMMEM_WRITE) < 0)
+    die("cannot write MP configuration table");
 }
 
 /* ------------------------------------------------------------------
