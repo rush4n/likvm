@@ -860,6 +860,8 @@ vmxhandle(struct vm *vm, struct vmexit *e, uint inslen)
   // cprintf("exit %d rip %x\n", (uint64)e->reason, e->rip);
   switch (e->reason){
     case EXIT_EXTERNAL_INTR:
+      if(ticks != vm->starttick)
+        return 0;
       return 1;
     case EXIT_EXCEPTION_NMI:
       if (INTR_INFO_TYPE(e->intrinfo) == INTR_TYPE_NMI)
@@ -874,6 +876,8 @@ vmxhandle(struct vm *vm, struct vmexit *e, uint inslen)
     case EXIT_HLT:
       vm->rip += inslen;
       return 0;
+    case EXIT_INTR_WINDOW:
+      return 1;
     case EXIT_CPUID:
       vmxcpuid(vm);
       vm->rip += inslen;
@@ -913,6 +917,7 @@ vmrun(int id, struct vmexit *ue)
 
   if((vm = getvm(id)) == 0)
     return -1;
+  vm->starttick = ticks;
 
   for(;;){
     /* Check for kill between guest runs, since the guest may spin. */
@@ -959,6 +964,7 @@ vmrun(int id, struct vmexit *ue)
     if(vm->efer & EFER_LMA)
       entryctl |= ENTRY_IA32E_MODE_GUEST;
     vmwrite(VM_ENTRY_CONTROLS, entryctl);
+    vmxinject(vm);
 
     /*
      * Enter the guest (vmxasm.S).  The second argument is "launched":
@@ -1005,6 +1011,12 @@ vmrun(int id, struct vmexit *ue)
       vm->cr0 = vmread(GUEST_CR0);
       vm->cr3 = vmread(GUEST_CR3);
       vm->cr4 = vmread(GUEST_CR4);
+      vm->intrstate = vmread(GUEST_INTERRUPTIBILITY_INFO);
+      vm->idtvec = vmread(IDT_VECTORING_INFO);
+      if(vm->idtvec & INTR_INFO_VALID){
+        vm->idterr = vmread(IDT_VECTORING_ERROR_CODE);
+        vm->idtlen = inslen;
+      }
     }
     /* Release the VMCS and turn interrupts back on (HW1 part 5, Step 8). */
     vmclear(V2P(vm->vmcs));
@@ -1157,6 +1169,7 @@ vminject(int id, int vector)
    */
   if((vm = getvm(id)) == 0 || vector < 32 || vector > 255)
     return -1;
+  /* cprintf("vminject %d\n", vector); */
   /*
    * Only record the request: the guest is not running (the owner, the
    * only caller, is in this system call, not in vmrun()), so no VMCS is
@@ -1239,7 +1252,33 @@ vmxcpuid(struct vm *vm)
 static void
 vmxinject(struct vm *vm)
 {
-  /* HW2 Part 4: write this function; see HW2.md. */
-  vmwrite(VM_ENTRY_INTR_INFO_FIELD, 0);
-  vmwrite(CPU_BASED_VM_EXEC_CONTROL, vm->cpuctl);
+  uint info, ctl;
+  int vector;
+
+  info = 0;
+  ctl = vm->cpuctl;
+  if(vm->idtvec & INTR_INFO_VALID){
+    info = vm->idtvec & ~(1U << 12);
+    if(info & (1 << 11))
+      vmwrite(VM_ENTRY_EXCEPTION_ERROR_CODE, vm->idterr);
+    if(INTR_INFO_TYPE(info) == INTR_TYPE_SOFT_INTR ||
+       INTR_INFO_TYPE(info) == INTR_TYPE_PRIV_SW_EXC ||
+       INTR_INFO_TYPE(info) == INTR_TYPE_SOFT_EXC)
+      vmwrite(VM_ENTRY_INSTRUCTION_LEN, vm->idtlen);
+    vm->idtvec = 0;
+  } else if((vector = nextpending(vm)) >= 0 && (vm->rflags & FL_IF) &&
+            !(vm->intrstate & (INTERRUPTIBILITY_STI | INTERRUPTIBILITY_MOVSS))){
+    info = INTR_INFO_VALID | vector;
+    vm->pending[vector / 64] &= ~(1ULL << (vector % 64));
+  }
+  if(nextpending(vm) >= 0)
+    ctl |= CPU_INTR_WINDOW_EXITING;
+
+  /* 
+  if(info & INTR_INFO_VALID)
+    cprintf("inject 0x%x\n", (uint64)info);
+  */
+
+  vmwrite(VM_ENTRY_INTR_INFO_FIELD, info);
+  vmwrite(CPU_BASED_VM_EXEC_CONTROL, ctl);
 }
