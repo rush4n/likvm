@@ -917,8 +917,10 @@ vmrun(int id, struct vmexit *ue)
   struct vm *vm;
   struct vmexit e;
   uint64 reason, entryctl;
+  uint64 t; 
   uint inslen;
   int c, r;
+  static int gvaok;
 
   if((vm = getvm(id)) == 0)
     return -1;
@@ -1016,6 +1018,18 @@ vmrun(int id, struct vmexit *ue)
       vm->cr0 = vmread(GUEST_CR0);
       vm->cr3 = vmread(GUEST_CR3);
       vm->cr4 = vmread(GUEST_CR4);
+
+      /*
+      if(vm->cr0 & CR0_PG){
+        if(gva2gpa(vm, KERNBASE + 0x100000, &t) < 0 || t != 0x100000)
+          cprintf("gva2gpa: bad translation of KERNBASE+1MB\n");
+        else if(!gvaok){
+          cprintf("gva2gpa: KERNBASE+1MB -> 0x%x\n", t);
+          gvaok = 1;
+        }
+      }
+      */
+
       vm->intrstate = vmread(GUEST_INTERRUPTIBILITY_INFO);
       vm->idtvec = vmread(IDT_VECTORING_INFO);
 
