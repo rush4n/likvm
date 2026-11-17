@@ -724,8 +724,24 @@ idedone(int n)
 static void
 idestring(struct vmexit *e)
 {
-  /* HW2 Part 5: write this function; see HW2.md. */
-  die("idestring not written");
+  uint64 n;
+
+  if(e->io.count > (idelen - idepos) / e->io.size)
+    die("string I/O too large");
+  n = e->io.count * e->io.size;
+  if(e->io.in){
+    if(vmmem(vm, e->io.addr, idebuf + idepos, n,
+             VMMEM_VIRT | VMMEM_WRITE) < 0)
+      die("INS to an unmapped guest address");
+    vmsetreg(vm, VMREG_RDI, getreg(VMREG_RDI) + e->io.count);
+  } else {
+    if(vmmem(vm, e->io.addr, idebuf + idepos, n, VMMEM_VIRT) < 0)
+      die("OUTS from an unmapped guest address");
+    vmsetreg(vm, VMREG_RSI, getreg(VMREG_RSI) + e->io.count);
+  }
+  if(e->io.rep)
+    vmsetreg(vm, VMREG_RCX, 0);
+  idedone(n);
 }
 
 /* Ports 0x1F0-0x1F7, and 0x3F6 (control and alternate status). */

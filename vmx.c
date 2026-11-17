@@ -883,13 +883,18 @@ vmxhandle(struct vm *vm, struct vmexit *e, uint inslen)
       vm->rip += inslen;
       return 1;
     case EXIT_IO:
-      if(e->qual & (1 << 4))
-        return 0;
+      if(e->qual & (1 << 4)){
+        e->io.string = 1;
+        e->io.rep = (e->qual >> 5) & 1;
+        e->io.count = e->io.rep ? vm->regs.rcx : 1;
+      }
+
       e->io.port = e->qual >> 16;
       e->io.size = (e->qual & 7) + 1;
       e->io.in = (e->qual >> 3) & 1;
       vm->rip += inslen;
-      if(!e->io.in)
+
+      if(!e->io.in && !e->io.string)
         e->io.data = vm->regs.rax & iomask(e->io.size);
       return 0;
   }
@@ -1013,10 +1018,14 @@ vmrun(int id, struct vmexit *ue)
       vm->cr4 = vmread(GUEST_CR4);
       vm->intrstate = vmread(GUEST_INTERRUPTIBILITY_INFO);
       vm->idtvec = vmread(IDT_VECTORING_INFO);
+
       if(vm->idtvec & INTR_INFO_VALID){
         vm->idterr = vmread(IDT_VECTORING_ERROR_CODE);
         vm->idtlen = inslen;
       }
+
+      if(e.reason == EXIT_IO && (e.qual & (1 << 4)))
+        e.io.addr = vmread(GUEST_LINEAR_ADDRESS);
     }
     /* Release the VMCS and turn interrupts back on (HW1 part 5, Step 8). */
     vmclear(V2P(vm->vmcs));
